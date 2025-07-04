@@ -7,8 +7,8 @@ from telegram.ext import (
     ContextTypes
 )
 
-BOT_TOKEN = "7841136579:AAEvrOsxKv-M04w5dtJF9gXBKTEefZyceA0"
-CHAT_ID = "6440088895"
+BOT_TOKEN = "token"
+CHAT_ID = "数字id"
 CHECK_INTERVAL = 300  # 秒
 last_ip = None
 
