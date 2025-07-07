@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = "token"
-CHAT_ID = "数字id"
+CHAT_ID = "数字id"  # 只有此 chat_id 有权限接收通知
 CHECK_INTERVAL = 300  # 秒
 last_ip = None
 
@@ -37,11 +37,15 @@ async def check_ip_loop(app):
         await asyncio.sleep(CHECK_INTERVAL)
 
 async def ip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    current_ip = await get_public_ip()
-    if current_ip:
-        await update.message.reply_text(f"📡 当前公网 IP 是：{current_ip}")
+    # 认证用户 chat_id
+    if str(update.message.chat.id) == CHAT_ID:
+        current_ip = await get_public_ip()
+        if current_ip:
+            await update.message.reply_text(f"📡 当前公网 IP 是：{current_ip}")
+        else:
+            await update.message.reply_text("❌ 获取公网 IP 失败。")
     else:
-        await update.message.reply_text("❌ 获取公网 IP 失败。")
+        await update.message.reply_text("❌ 无权限访问该功能。")
 
 # ✅ 改成同步函数
 def main():
