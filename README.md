@@ -7,6 +7,7 @@
 - 自动更新Cloudflare DNS记录
 - 支持Telegram消息通知
 - 所有配置集中于.env文件
+- 记得重命名 - 副本.env为.env（GitHub无法上传空名文件）
 
 ## 使用方法
 
