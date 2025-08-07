@@ -44,6 +44,31 @@ def update_dns_record(new_ip):
     resp = requests.put(url, headers=headers, json=data)
     return resp.ok
 
+def get_public_ipv6():
+    """获取公网IPv6地址"""
+    try:
+        return requests.get("https://api64.ipify.org").text
+    except Exception as e:
+        print(f"获取公网IPv6失败: {e}")
+        return None
+
+def get_dns_record_ipv6():
+    url = f"{CF_API_BASE}/zones/{CF_ZONE_ID}/dns_records/{os.getenv('CF_RECORD_ID_IPV6') or ''}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+    resp = requests.get(url, headers=headers)
+    if resp.ok:
+        return resp.json()["result"]["content"]
+    else:
+        print(f"获取DNS AAAA记录失败: {resp.text}")
+        return None
+
+def update_dns_record_ipv6(new_ipv6):
+    url = f"{CF_API_BASE}/zones/{CF_ZONE_ID}/dns_records/{os.getenv('CF_RECORD_ID_IPV6') or ''}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+    data = {"type": "AAAA", "name": CF_RECORD_NAME, "content": new_ipv6, "ttl": 1, "proxied": False}
+    resp = requests.put(url, headers=headers, json=data)
+    return resp.ok
+
 def send_telegram_message(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
@@ -73,129 +98,134 @@ async def ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(TELEGRAM_CHAT_ID):
         await update.message.reply_text("无权限。请联系管理员绑定chat_id。")
         return
-    
     await update.message.reply_text("🔍 正在检查IP信息...")
-    
     try:
         public_ip = get_public_ip()
-        if not public_ip:
-            await update.message.reply_text("❌ 无法获取公网IP")
-            return
-            
+        public_ipv6 = get_public_ipv6()
         dns_ip = get_dns_record_ip()
-        if not dns_ip:
-            await update.message.reply_text("❌ 无法获取DNS记录IP")
-            return
-        
-        # 查询IP详细信息
+        dns_ipv6 = get_dns_record_ipv6()
+        msg = "📊 **IP信息详情**\n\n"
+        # IPv4
+        if public_ip:
+            msg += f"🌐 当前公网IPv4: `{public_ip}`\n"
+        if dns_ip:
+            msg += f"🔗 DNS记录IPv4: `{dns_ip}`\n"
+        # IPv6
+        if public_ipv6:
+            msg += f"🌐 当前公网IPv6: `{public_ipv6}`\n"
+        if dns_ipv6:
+            msg += f"🔗 DNS记录IPv6: `{dns_ipv6}`\n"
+        # 查询IP详细信息（仅IPv4）
         asn = country = org = isp_type = "-"
         try:
-            resp = requests.get(f"https://ipinfo.io/{public_ip}/json", timeout=5)
-            if resp.ok:
-                data = resp.json()
-                asn = data.get("org", "-")
-                country = data.get("country", "-")
-                org = data.get("org", "-")
-                # 判断是否为家宽ISP（简单判断：org/org字段包含 'CHINANET', 'UNICOM', 'MOBILE', 'BROADBAND', 'TELECOM', '家庭', 'ISP' 等关键词）
-                isp_keywords = ["CHINANET", "UNICOM", "MOBILE", "BROADBAND", "TELECOM", "家庭", "ISP"]
-                isp_type = "yes" if any(k.lower() in org.lower() for k in isp_keywords) else "no"
-        except Exception as e:
+            if public_ip:
+                resp = requests.get(f"https://ipinfo.io/{public_ip}/json", timeout=5)
+                if resp.ok:
+                    data = resp.json()
+                    asn = data.get("org", "-")
+                    country = data.get("country", "-")
+                    org = data.get("org", "-")
+                    isp_keywords = ["CHINANET", "UNICOM", "MOBILE", "BROADBAND", "TELECOM", "家庭", "ISP"]
+                    isp_type = "yes" if any(k.lower() in org.lower() for k in isp_keywords) else "no"
+        except Exception:
             pass
-        
-        # 构建基础信息
-        msg = (
-            f"📊 **IP信息详情**\n\n"
-            f"🌐 当前公网IP: `{public_ip}`\n"
-            f"🔗 DNS记录IP: `{dns_ip}`\n"
-            f"🏢 ASN: {asn}\n"
-            f"🌍 国家: {country}\n"
-            f"🏛️ 所属企业: {org}\n"
-            f"📡 ISP类型: {isp_type}\n"
-            f"📍 数据来源: ipify.org\n\n"
-        )
-        
-        # 检查IP是否相同并执行相应操作
-        if public_ip == dns_ip:
-            msg += "✅ **状态**: IP地址一致，无需更新DNS记录"
-            await update.message.reply_text(msg, parse_mode='Markdown')
-        else:
-            msg += f"⚠️ **检测到IP变化**: {dns_ip} → {public_ip}\n\n🔄 正在自动更新DNS记录..."
-            await update.message.reply_text(msg, parse_mode='Markdown')
-            
-            # 执行DNS更新
-            if update_dns_record(public_ip):
-                update_msg = f"✅ **DNS更新成功!**\n{CF_RECORD_NAME}: {dns_ip} → {public_ip}"
-                # 发送Telegram通知
-                send_telegram_message(f"Cloudflare DDNS自动更新成功: {CF_RECORD_NAME} -> {public_ip}")
+        msg += f"🏢 ASN: {asn}\n🌍 国家: {country}\n🏛️ 所属企业: {org}\n📡 ISP类型: {isp_type}\n📍 数据来源: ipify.org\n\n"
+        # 检查IPv4
+        if public_ip and dns_ip:
+            if public_ip == dns_ip:
+                msg += "✅ **IPv4状态**: IP地址一致，无需更新DNS记录\n"
             else:
-                update_msg = f"❌ **DNS更新失败!**\n请检查Cloudflare配置或网络连接"
-                # 发送Telegram通知
-                send_telegram_message(f"Cloudflare DDNS自动更新失败: {CF_RECORD_NAME}")
-            
-            await update.message.reply_text(update_msg, parse_mode='Markdown')
-            
+                msg += f"⚠️ **IPv4检测到IP变化**: {dns_ip} → {public_ip}\n🔄 正在自动更新DNS记录...\n"
+                if update_dns_record(public_ip):
+                    update_msg = f"✅ **IPv4 DNS更新成功!**\n{CF_RECORD_NAME}: {dns_ip} → {public_ip}"
+                    send_telegram_message(f"Cloudflare DDNS自动更新成功(IPv4): {CF_RECORD_NAME} -> {public_ip}")
+                else:
+                    update_msg = f"❌ **IPv4 DNS更新失败!**\n请检查Cloudflare配置或网络连接"
+                    send_telegram_message(f"Cloudflare DDNS自动更新失败(IPv4): {CF_RECORD_NAME}")
+                msg += update_msg + "\n"
+        # 检查IPv6
+        if public_ipv6 and dns_ipv6:
+            if public_ipv6 == dns_ipv6:
+                msg += "✅ **IPv6状态**: IP地址一致，无需更新DNS记录\n"
+            else:
+                msg += f"⚠️ **IPv6检测到IP变化**: {dns_ipv6} → {public_ipv6}\n🔄 正在自动更新DNS记录...\n"
+                if update_dns_record_ipv6(public_ipv6):
+                    update_msg = f"✅ **IPv6 DNS更新成功!**\n{CF_RECORD_NAME}: {dns_ipv6} → {public_ipv6}"
+                    send_telegram_message(f"Cloudflare DDNS自动更新成功(IPv6): {CF_RECORD_NAME} -> {public_ipv6}")
+                else:
+                    update_msg = f"❌ **IPv6 DNS更新失败!**\n请检查Cloudflare配置或网络连接"
+                    send_telegram_message(f"Cloudflare DDNS自动更新失败(IPv6): {CF_RECORD_NAME}")
+                msg += update_msg + "\n"
+        await update.message.reply_text(msg, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ 检查IP时发生错误: {str(e)}")
 
 async def update_ddns(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """手动触发DDNS更新的命令"""
     if str(update.effective_chat.id) != str(TELEGRAM_CHAT_ID):
         await update.message.reply_text("无权限。请联系管理员绑定chat_id。")
         return
-    
     await update.message.reply_text("正在检查并更新DDNS记录...")
-    
     try:
         public_ip = get_public_ip()
-        if not public_ip:
-            await update.message.reply_text("❌ 无法获取公网IP")
-            return
-            
+        public_ipv6 = get_public_ipv6()
         dns_ip = get_dns_record_ip()
-        if not dns_ip:
-            await update.message.reply_text("❌ 无法获取DNS记录IP")
-            return
-            
-        if public_ip != dns_ip:
+        dns_ipv6 = get_dns_record_ipv6()
+        msg = ""
+        # IPv4
+        if public_ip and dns_ip and public_ip != dns_ip:
             if update_dns_record(public_ip):
-                msg = f"✅ DDNS更新成功!\n{CF_RECORD_NAME}: {dns_ip} → {public_ip}"
+                msg += f"✅ IPv4 DDNS更新成功!\n{CF_RECORD_NAME}: {dns_ip} → {public_ip}\n"
             else:
-                msg = f"❌ DDNS更新失败!\n当前公网IP: {public_ip}\nDNS记录IP: {dns_ip}"
-        else:
-            msg = f"ℹ️ IP未发生变化，无需更新\n当前IP: {public_ip}"
-            
+                msg += f"❌ IPv4 DDNS更新失败!\n当前公网IP: {public_ip}\nDNS记录IP: {dns_ip}\n"
+        elif public_ip and dns_ip:
+            msg += f"ℹ️ IPv4未发生变化，无需更新\n当前IP: {public_ip}\n"
+        # IPv6
+        if public_ipv6 and dns_ipv6 and public_ipv6 != dns_ipv6:
+            if update_dns_record_ipv6(public_ipv6):
+                msg += f"✅ IPv6 DDNS更新成功!\n{CF_RECORD_NAME}: {dns_ipv6} → {public_ipv6}\n"
+            else:
+                msg += f"❌ IPv6 DDNS更新失败!\n当前公网IPv6: {public_ipv6}\nDNS记录IPv6: {dns_ipv6}\n"
+        elif public_ipv6 and dns_ipv6:
+            msg += f"ℹ️ IPv6未发生变化，无需更新\n当前IPv6: {public_ipv6}\n"
         await update.message.reply_text(msg)
-        
     except Exception as e:
         await update.message.reply_text(f"❌ 检查DDNS时发生错误: {str(e)}")
 
 def check_and_update_ddns():
-    """检查并更新DDNS记录"""
     logger = logging.getLogger(__name__)
-    
     try:
         public_ip = get_public_ip()
-        if not public_ip:
-            logger.error("无法获取公网IP")
-            return
-            
+        public_ipv6 = get_public_ipv6()
         dns_ip = get_dns_record_ip()
-        if not dns_ip:
-            logger.error("无法获取DNS记录IP")
-            return
-            
-        if public_ip != dns_ip:
-            logger.info(f"IP发生变化: DNS记录 {dns_ip} -> 公网IP {public_ip}")
-            if update_dns_record(public_ip):
-                message = f"Cloudflare DDNS更新成功: {CF_RECORD_NAME} -> {public_ip}"
-                send_telegram_message(message)
-                logger.info(f"DNS记录已更新: {public_ip}")
+        dns_ipv6 = get_dns_record_ipv6()
+        # IPv4
+        if public_ip and dns_ip:
+            if public_ip != dns_ip:
+                logger.info(f"IPv4发生变化: DNS记录 {dns_ip} -> 公网IP {public_ip}")
+                if update_dns_record(public_ip):
+                    message = f"Cloudflare DDNS更新成功(IPv4): {CF_RECORD_NAME} -> {public_ip}"
+                    send_telegram_message(message)
+                    logger.info(f"IPv4 DNS记录已更新: {public_ip}")
+                else:
+                    message = f"Cloudflare DDNS更新失败(IPv4): {CF_RECORD_NAME}"
+                    send_telegram_message(message)
+                    logger.error("IPv4 DNS记录更新失败")
             else:
-                message = f"Cloudflare DDNS更新失败: {CF_RECORD_NAME}"
-                send_telegram_message(message)
-                logger.error("DNS记录更新失败")
-        else:
-            logger.debug(f"IP未变化: {public_ip}")
+                logger.debug(f"IPv4未变化: {public_ip}")
+        # IPv6
+        if public_ipv6 and dns_ipv6:
+            if public_ipv6 != dns_ipv6:
+                logger.info(f"IPv6发生变化: DNS记录 {dns_ipv6} -> 公网IPv6 {public_ipv6}")
+                if update_dns_record_ipv6(public_ipv6):
+                    message = f"Cloudflare DDNS更新成功(IPv6): {CF_RECORD_NAME} -> {public_ipv6}"
+                    send_telegram_message(message)
+                    logger.info(f"IPv6 DNS记录已更新: {public_ipv6}")
+                else:
+                    message = f"Cloudflare DDNS更新失败(IPv6): {CF_RECORD_NAME}"
+                    send_telegram_message(message)
+                    logger.error("IPv6 DNS记录更新失败")
+            else:
+                logger.debug(f"IPv6未变化: {public_ipv6}")
     except Exception as e:
         logger.error(f"DDNS检查过程中发生错误: {e}")
 
